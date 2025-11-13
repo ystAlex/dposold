@@ -236,7 +236,6 @@ func (pn *P2PNode) mainLoop() {
 	now := time.Now().UTC()
 	elapsedSinceGenesis := now.Sub(genesisTime)
 
-	// 如果创世时间未到，等待
 	if elapsedSinceGenesis < 0 {
 		waitDuration := -elapsedSinceGenesis
 		pn.Logger.Info("等待创世时间到达，等待时长: %v", waitDuration)
@@ -252,15 +251,8 @@ func (pn *P2PNode) mainLoop() {
 	// 2. 第一轮投票和选举（必须在出块前完成）
 	pn.Logger.Info("【第0轮】启动初始投票和选举")
 	pn.startVotingPhase()
-
-	// 等待投票收集
-	pn.Logger.Info("等待投票收集...")
-	time.Sleep(100 * time.Millisecond)
-
-	// 结束投票并选举
+	time.Sleep(100 * time.Millisecond) // 等待投票收集
 	pn.endVotingPhaseAndElect()
-
-	// 同步网络状态
 	pn.syncPeerStates()
 
 	pn.Logger.Info("初始选举完成，代理节点已就绪")
@@ -272,67 +264,50 @@ func (pn *P2PNode) mainLoop() {
 	currentBlockHeight := int(elapsedSinceGenesis.Seconds()) / config.BlockInterval
 
 	// 4. 创建定时器
-	// 区块定时器 - 每个区块间隔触发一次
 	nextBlockTime := genesisTime.Add(time.Duration((currentBlockHeight+1)*config.BlockInterval) * time.Second)
 	blockTicker := time.NewTimer(time.Until(nextBlockTime))
-
-	// 同步定时器 - 定期同步区块
 	syncTicker := time.NewTicker(2 * time.Second)
-
-	// 投票阶段定时器 - 每轮开始时触发（第一轮已经完成，所以设置为下一轮）
-	roundDuration := time.Duration(config.NumDelegates*config.BlockInterval) * time.Second
-	nextVotingTime := genesisTime.Add(roundDuration)
-	votingTicker := time.NewTimer(time.Until(nextVotingTime))
 
 	defer blockTicker.Stop()
 	defer syncTicker.Stop()
-	defer votingTicker.Stop()
 
 	pn.Logger.Info("主循环启动 | 当前区块高度: %d", currentBlockHeight)
 
 	for pn.IsRunning {
 		select {
-		case <-votingTicker.C:
-			// 新一轮开始 - 启动投票阶段
-			pn.Logger.Info("========================================")
-			pn.Logger.Info("新一轮开始 - 启动投票阶段")
-			pn.Logger.Info("========================================")
-
-			// 启动投票阶段
-			pn.startVotingPhase()
-
-			// 等待投票收集 100ms (给足够时间让所有节点广播投票)
-			time.Sleep(100 * time.Millisecond)
-
-			// 结束投票阶段并进行选举
-			pn.endVotingPhaseAndElect()
-
-			// 同步网络状态
-			pn.syncPeerStates()
-
-			// 重置投票定时器到下一轮
-			now = time.Now().UTC()
-			currentRound := int(now.Sub(genesisTime).Seconds()) / (config.NumDelegates * config.BlockInterval)
-			nextVotingTime = genesisTime.Add(time.Duration((currentRound+1)*config.NumDelegates*config.BlockInterval) * time.Second)
-			votingTicker.Reset(time.Until(nextVotingTime))
-
 		case <-blockTicker.C:
-			// 处理区块周期
-			pn.Logger.Info("[ ========= 处理区块 | 高度: %d =========]", currentBlockHeight)
+			// ================================
+			//在出块前检查是否需要投票
+			// ================================
 
-			// 检查是否需要新一轮投票选举
-			// 每个代理节点轮次开始时检查
-			if pn.Consensus.Scheduler.CurrentSlot == 0 && currentBlockHeight > 0 {
-				// 检查是否是新一轮的开始
-				blocksPerRound := config.NumDelegates
-				if currentBlockHeight%blocksPerRound == 0 {
-					pn.Logger.Info("轮次结束，准备下一轮投票选举")
-					// 注意：实际的投票会由 votingTicker 触发
-					// 这里只是标记轮次变化
-				}
+			// 检查是否是新一轮的开始（每N个区块为一轮）
+			blocksPerRound := config.NumDelegates
+			isNewRound := currentBlockHeight > 0 && currentBlockHeight%blocksPerRound == 0
+
+			if isNewRound {
+				pn.Logger.Info("========================================")
+				pn.Logger.Info("🗳️  新一轮开始 - 启动投票选举")
+				pn.Logger.Info("========================================")
+
+				// 启动投票阶段
+				pn.startVotingPhase()
+
+				// 等待投票收集 (给足够时间让所有节点广播投票)
+				time.Sleep(100 * time.Millisecond)
+
+				// 结束投票阶段并进行选举
+				pn.endVotingPhaseAndElect()
+
+				// 同步网络状态
+				pn.syncPeerStates()
+
+				pn.Logger.Info("✓ 投票选举完成，开始新一轮出块")
 			}
 
+			// ================================
 			// 执行共识流程(出块)
+			// ================================
+			pn.Logger.Info("[ ========= 处理区块 | 高度: %d =========]", currentBlockHeight)
 			pn.processConsensus()
 
 			// 更新区块高度

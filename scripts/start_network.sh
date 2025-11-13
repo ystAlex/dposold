@@ -8,7 +8,7 @@ set -e
 
 # 配置参数
 NUM_NODES=5              # 节点数量
-BASE_PORT=12000          # 起始端口
+BASE_PORT=13000          # 起始端口
 TEST_ROUNDS=20          # 测试轮数
 OUTPUT_DIR="./test_results"  # 输出目录
 
